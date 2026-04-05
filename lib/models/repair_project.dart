@@ -20,6 +20,9 @@ class RepairProject {
   final List<CriticalChipEntry> components;
   final DateTime createdAt;
 
+  /// Kluczowy identyfikator płyty (kod PCB / silkscreen) — alias [boardModelCode].
+  String get boardId => boardModelCode;
+
   String get displayTitle {
     final b = brand.trim();
     final m = modelName.trim();

@@ -627,8 +627,8 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
                           TextField(
                             controller: _deviceCategoryCtrl,
                             decoration: const InputDecoration(
-                              labelText: 'Device',
-                              hintText: 'e.g. Laptop',
+                              labelText: 'Urządzenie / kategoria',
+                              hintText: 'np. konsola, sterownik, sprzęt RTV',
                               border: OutlineInputBorder(),
                             ),
                             textCapitalization: TextCapitalization.words,
@@ -655,8 +655,8 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
                           TextField(
                             controller: _modelNameCtrl,
                             decoration: const InputDecoration(
-                              labelText: 'Device model',
-                              hintText: 'e.g. HP ProBook 650 G3',
+                              labelText: 'Model urządzenia',
+                              hintText: 'np. nazwa handlowa lub platformy',
                               border: OutlineInputBorder(),
                             ),
                             textCapitalization: TextCapitalization.words,

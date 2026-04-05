@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../models/repair_project.dart';
+import '../models/repair_summary.dart';
 import '../services/repair_storage.dart';
 import 'diagnostic_dashboard_screen.dart';
+import 'measurements_quick_screen.dart';
 import 'verification_wizard_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -13,18 +14,30 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late Future<List<RepairProject>> _repairsFuture;
+  late Future<List<RepairSummary>> _summariesFuture;
 
   @override
   void initState() {
     super.initState();
-    _repairsFuture = RepairStorage.instance.loadRepairs();
+    _summariesFuture = RepairStorage.instance.loadRepairSummaries();
   }
 
   void _refresh() {
     setState(() {
-      _repairsFuture = RepairStorage.instance.loadRepairs();
+      _summariesFuture = RepairStorage.instance.loadRepairSummaries();
     });
+  }
+
+  Future<void> _openRepair(String id, {required bool measurements}) async {
+    final repair = await RepairStorage.instance.getRepairById(id);
+    if (!mounted || repair == null) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) => measurements
+            ? MeasurementsQuickScreen(repair: repair)
+            : DiagnosticDashboardScreen(repair: repair),
+      ),
+    );
   }
 
   @override
@@ -54,7 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 foregroundColor: Colors.black,
               ),
               child: const Text(
-                'Start New Repair',
+                'Nowa naprawa',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
             ),
@@ -62,7 +75,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Text(
-              'Recent repairs',
+              'Ostatnie (Board_ID)',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -71,8 +84,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           Expanded(
-            child: FutureBuilder<List<RepairProject>>(
-              future: _repairsFuture,
+            child: FutureBuilder<List<RepairSummary>>(
+              future: _summariesFuture,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
@@ -80,46 +93,57 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (snapshot.hasError) {
                   return Center(
                     child: Text(
-                      'Could not load history: ${snapshot.error}',
+                      'Błąd listy: ${snapshot.error}',
                       style: const TextStyle(color: Colors.redAccent),
                     ),
                   );
                 }
-                final repairs = snapshot.data ?? [];
-                if (repairs.isEmpty) {
+                final items = snapshot.data ?? [];
+                if (items.isEmpty) {
                   return const Center(
                     child: Text(
-                      'No repairs yet. Start one to build your local history.',
+                      'Brak wpisów. Utwórz naprawę — zapis jest lokalny.',
                       style: TextStyle(color: Colors.grey),
                     ),
                   );
                 }
                 return ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: repairs.length,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  itemCount: items.length,
                   separatorBuilder: (context, index) =>
                       const Divider(height: 1),
                   itemBuilder: (context, index) {
-                    final r = repairs[index];
+                    final r = items[index];
+                    final bid = r.boardId.isEmpty ? '—' : r.boardId;
                     return ListTile(
                       title: Text(
-                        r.displayTitle,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        bid,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.orangeAccent,
+                          fontSize: 16,
+                        ),
                       ),
                       subtitle: Text(
-                        '${r.boardModelCode} · ${r.id} · '
+                        '${r.deviceLabel}\n'
                         '${r.createdAt.toLocal().toString().split('.').first}',
-                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                        style:
+                            const TextStyle(color: Colors.grey, fontSize: 12),
                       ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () {
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (context) =>
-                                DiagnosticDashboardScreen(repair: r),
+                      isThreeLine: true,
+                      leading: const Icon(Icons.memory_outlined),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: 'Pomiary (szybki wpis)',
+                            icon: const Icon(Icons.speed),
+                            onPressed: () => _openRepair(r.id, measurements: true),
                           ),
-                        );
-                      },
+                          const Icon(Icons.chevron_right),
+                        ],
+                      ),
+                      onTap: () => _openRepair(r.id, measurements: false),
                     );
                   },
                 );

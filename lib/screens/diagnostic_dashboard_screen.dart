@@ -9,6 +9,7 @@ import '../services/diagnostic_chat_service.dart';
 import '../services/repair_storage.dart';
 import '../widgets/diagnostic_drawer_camera_panel.dart';
 import '../widgets/microscope_chat_image.dart';
+import 'measurements_quick_screen.dart';
 
 /// Interactive assistant flow: Groq-led diagnosis with optional technical drawer.
 class DiagnosticDashboardScreen extends StatefulWidget {
@@ -308,6 +309,18 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
         title: Text('Asystent · ${repair.summaryLine}'),
         backgroundColor: const Color(0xFF1F1F1F),
         actions: [
+          IconButton(
+            tooltip: 'Pomiary',
+            onPressed: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (context) =>
+                      MeasurementsQuickScreen(repair: widget.repair),
+                ),
+              );
+            },
+            icon: const Icon(Icons.speed),
+          ),
           if (_technicalPreview.isNotEmpty)
             IconButton(
               tooltip: 'Szczegóły techniczne',
@@ -578,7 +591,9 @@ class _RepairHeaderBar extends StatelessWidget {
               ),
             ),
             Text(
-              'Board: ${repair.boardModelCode} · ${repair.brand.isNotEmpty ? repair.brand : '—'} / ${repair.modelName.isNotEmpty ? repair.modelName : '—'}',
+              'Board_ID: ${repair.boardId.isNotEmpty ? repair.boardId : '—'} · '
+              '${repair.brand.isNotEmpty ? repair.brand : '—'} / '
+              '${repair.modelName.isNotEmpty ? repair.modelName : '—'}',
               style: const TextStyle(
                 color: Colors.orangeAccent,
                 fontSize: 12,

@@ -62,24 +62,24 @@ abstract final class DiagnosticChatService {
     return r.components.map((c) => '${c.label}: ${c.value}').join('\n');
   }
 
-  /// Marketing / device line for prompts (e.g. "HP ProBook G3").
+  /// Opis urządzenia / platformy (marka, model).
   static String _boardProductLine(RepairProject r) {
     final b = r.brand.trim();
     final m = r.modelName.trim();
-    if (b.isEmpty && m.isEmpty) return 'nieznany laptop / płyta';
+    if (b.isEmpty && m.isEmpty) return 'nieznane urządzenie / płyta';
     if (b.isEmpty) return m;
     if (m.isEmpty) return b;
     return '$b $m';
   }
 
-  /// Core persona + board anchor — included on every API call via the system message.
+  /// Core persona + Board_ID — included on every API call via the system message.
   static String _coreTechnicianAndBoardContext(RepairProject r) {
     final line = _boardProductLine(r);
     final bid = r.boardModelCode.trim().isEmpty ? '(brak Board ID)' : r.boardModelCode.trim();
     return '''
-You are an expert laptop repair technician. The current board is $line ($bid). Use your knowledge of this specific board's schematics, typical placement, and signal/power paths for this PCB code.
+You are an expert electronics repair technician (boards, embedded, consumer/industrial). The current assembly uses PCB identified as Board_ID $bid (device context: $line). Use schematic-level reasoning for this PCB code: placement, power/signal paths, typical nets.
 
-To samo po polsku (obowiązuje w rozumowaniu): Jesteś ekspertem od naprawy laptopów na poziomie serwisu ze schematami. Aktualna płyta to: $line (Board ID / kod PCB: $bid). Korzystaj z wiedzy o tej konkretnej płycie i typowych schematach dla tego oznaczenia PCB — nie traktuj jej jak „anonimowej” płyty ogólnej.
+To samo po polsku: Jesteś ekspertem od naprawy elektroniki (płyty drukowane, układy wbudowane, sprzęt RTV i przemysłowy). Kluczowy identyfikator to Board_ID / kod PCB: $bid (kontekst urządzenia: $line). Wykorzystuj wiedzę o tej płycie i typowych schematach dla tego oznaczenia — nie traktuj jej jak anonimowej „płyty z szuflady”.
 ''';
   }
 
@@ -96,9 +96,9 @@ JĘZYK — ODPOWIEDZI DO UŻYTKOWNIKA (OBOWIĄZKOWE):
 PAMIĘĆ I HISTORIA:
 - W żądaniu API pole "messages" zawiera PEŁNĄ historię tej rozmowy (wszystkie wcześniejsze wiadomości user i assistant w kolejności). Musisz z niej aktywnie korzystać: pamiętaj ustalenia sprzed kilku minut, wcześniejsze designatory i kontekst naprawy. Nie resetuj się jak bot bez pamięci.
 
-IDENTYFIKACJA PŁYTY (dane sesji):
+IDENTYFIKACJA (dane sesji):
+- Board_ID (kod PCB / silkscreen — KLUCZOWY): ${bid.isEmpty ? '(nie podano)' : bid}
 - Produkt / platforma: $line
-- Board ID (kod PCB): ${bid.isEmpty ? '(nie podano)' : bid}
 - Kategoria urządzenia: ${r.deviceCategory}
 
 INTAKE / SYMPTOMY:
@@ -111,7 +111,7 @@ DESIGNATORY KOMPONENTÓW (X400, L400, Q12, R203, C88, U42 itd.):
 
 ZASADY DODATKOWE:
 - Bez linków zakupowych, cen, sklepów.
-- Odpowiadaj w kontekście tej płyty ($line, $bid) — nie używaj bezpłciowych porad „dla każdego laptopa”, jeśli pytanie dotyczy konkretnego miejsca lub designatora.
+- Odpowiadaj w kontekście tej płyty i Board_ID ($line, $bid) — unikaj ogólników niezwiązanych z tą konstrukcją, gdy pytanie dotyczy konkretnego miejsca lub designatora.
 - Jeśli użytkownik przesłał zdjęcie z mikroskopu, analizuj je szczegółowo (komponenty, pady, ślady).
 - Jeśli wiadomość zaczyna się od „[Dowód wizualny]”, traktuj załączone zdjęcie jako dowód wizualny dla bieżącego etapu diagnozy — powiąż analizę z wcześniejszymi ustaleniami w czacie, nie tylko ogólny opis zdjęcia.
 

@@ -10,7 +10,7 @@ abstract final class DiagnosticTemplates {
     if (s.contains('tablet') || s.contains('ipad')) {
       return 'tablet';
     }
-    return 'laptop';
+    return 'embedded';
   }
 
   static DiagnosticProfile forDeviceCategory(String deviceCategory) {
@@ -20,71 +20,72 @@ abstract final class DiagnosticTemplates {
       case 'tablet':
         return _genericTablet();
       default:
-        return _genericLaptop();
+        return _genericEmbeddedBoard();
     }
   }
 
-  static DiagnosticProfile _genericLaptop() {
+  /// Płyty główne / embedded / przemysł — większe PCB i moduły.
+  static DiagnosticProfile _genericEmbeddedBoard() {
     return const DiagnosticProfile(
       mainPowerRails: [
         MainPowerRail(
-          name: 'Adapter / VIN',
-          description: 'Input from barrel or USB-C PD rail before main conversion',
-          measurementHint: 'V: adapter present; Ω: short check',
+          name: 'Wejście zasilania / VIN',
+          description: 'DC jack, USB-PD, zasilacz przed przetwornicami',
+          measurementHint: 'V: obecność; Ω: zwarcie na wejściu',
         ),
         MainPowerRail(
-          name: '+3VALW / +3VLP',
-          description: 'Always-on / standby 3.3 V (EC, PCH partial)',
-          measurementHint: 'Expect ~3.3 V in S0/S3',
+          name: '+3.3 V (logika / standby)',
+          description: 'Często pierwsza szyna z LDO lub PMIC',
+          measurementHint: '~3.3 V przy włączonym obwodzie',
         ),
         MainPowerRail(
-          name: '+5VALW',
-          description: '5 V always-on for USB, some loads',
-          measurementHint: '~5 V when enabled',
+          name: '+5 V / pośrednie',
+          description: 'USB, silniki, wentylatory — zależnie od projektu',
+          measurementHint: '~5 V gdy włączone',
         ),
         MainPowerRail(
-          name: 'VCORE (CPU)',
-          description: 'Core buck output to CPU',
-          measurementHint: 'SVID/IMVP — varies with load',
+          name: 'Rdzeń SoC / MCU / CPU',
+          description: 'Główny buck — napięcie zależne od obciążenia',
+          measurementHint: 'Sprawdź nazwę sieci na schemacie',
         ),
         MainPowerRail(
-          name: 'DRAM VDDQ',
-          description: 'Memory supply',
-          measurementHint: 'DDR3/DDR4 typical 1.35–1.5 V',
+          name: 'Pamięć',
+          description: 'DDR / SRAM / flash supply',
+          measurementHint: 'Typowo 1.2–1.5 V wg standardu',
         ),
         MainPowerRail(
-          name: 'PCH / chipset core',
-          description: '1.0 V–1.8 V typ. PCH rail',
-          measurementHint: 'Check schematic net name on your board',
+          name: 'LDO pomocnicze',
+          description: '1.0–2.5 V dla peryferiów',
+          measurementHint: 'Porównaj z BOM',
         ),
       ],
       commonFaults: [
-        'No power / dead short on 19 V input',
-        'Power LED on but no POST — missing S3/S0 rails',
-        'Random shutdown — thermal or VCORE instability',
-        'USB/LAN dead — missing +3V/+5V derived rails',
-        'Battery not charging — ACFET / PQ or fuel gauge path',
+        'Brak napięcia wejściowego lub zwarcie na VIN',
+        'Brak szyn pomocniczych — sekwencja PMIC/LDO',
+        'Niestabilna przetwornica — MOSFET, dławik, kondensatory',
+        'Uszkodzona ścieżka lub słabe GND',
+        'Przegrzanie — zwarcie pod obciążeniem',
       ],
       startupSequence: [
         StartupStep(
-          signal: 'Adapter present / ACIN',
-          description: 'Verify input voltage and current limit',
+          signal: 'Wejście zasilania',
+          description: 'Potwierdź napięcie i pobór prądu',
         ),
         StartupStep(
-          signal: '+3VLP / +3VALW',
-          description: 'First standby rails from PMIC or discrete LDOs',
+          signal: 'Szyny 3V3 / 1V8',
+          description: 'Pierwsze napięcia po PMIC lub LDO',
         ),
         StartupStep(
-          signal: 'RSMRST# / PM_RESET',
-          description: 'PCH out of reset, sequencing OK',
+          signal: 'Reset / zegar',
+          description: 'RESET, kwarc, ewentualnie PLL',
         ),
         StartupStep(
-          signal: 'SLP_S4# / SLP_S3#',
-          description: 'Sleep states as you press power',
+          signal: 'Główne przetwornice',
+          description: 'Włączenie bucków pod kontrolą MCU',
         ),
         StartupStep(
-          signal: 'CPU VCORE enable',
-          description: 'VR_ON or equivalent — core rail comes up',
+          signal: 'Peryferia / interfejsy',
+          description: 'Po stabilizacji rdzenia',
         ),
       ],
       confidence: 'low',

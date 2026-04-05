@@ -34,7 +34,7 @@ You are an expert board-level repair diagnostician. The technician confirmed a P
 
 Return ONE JSON object only (no markdown). Use exactly these keys:
 
-- "main_power_rails": array of 4 to 6 objects. Each object MUST have "name" (net/signal to probe, e.g. rail name on schematic or common laptop label), "description" (one short sentence what it feeds), optional "measurement_hint" (expected V range, diode expectation, or Ω check — not guesses for unknown boards).
+- "main_power_rails": array of 4 to 6 objects. Each object MUST have "name" (net/signal to probe — use schematic rail names), "description" (one short sentence what it feeds), optional "measurement_hint" (expected V range, diode expectation, or Ω check — not guesses for unknown boards).
 
 - "common_faults": array of 3 to 5 short strings: typical failure modes for THIS architecture (not generic marketing fluff).
 
@@ -48,7 +48,7 @@ Context (use all of it):
 - model: $model
 - confirmed_board_id (PCB silk-screen / manufacturer code): $boardId
 
-If the board ID is unfamiliar, still pick rails appropriate for device_category (Laptop vs Phone vs Tablet) and set confidence to "low". Do not invent fake Apple net names unless the device is Apple. For generic PC laptops use typical PC/OEM naming (e.g. standby rails, VCORE, PCH); for phones use PMIC/VBAT/VDD_MAIN style naming.
+If the board ID is unfamiliar, still pick rails appropriate for device_category (embedded/PCB vs phone vs tablet) and set confidence to "low". Do not invent fake vendor-specific net names. For larger embedded/mainboard-class PCBs use typical naming (standby 3V3, input VIN, core bucks, memory rails); for phones use PMIC/VBAT/VDD_MAIN style naming.
 ''';
 
     final body = {

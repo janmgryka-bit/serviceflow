@@ -2,18 +2,18 @@
 
 Krótki opis aplikacji (np. do wklejenia w **Google Gemini** lub innym czacie jako kontekst projektu):
 
-> **ServiceFlow AI** to aplikacja desktopowa (Flutter) dla serwisu naprawy płyt laptopowych. Łączy lokalną bazę napraw, kreatora weryfikacji płyty z wyszukiwaniem kodów PCB przez AI (Groq), interaktywny czat diagnostyczny z analizą obrazu (zdjęcia z mikroskopu / kamery UVC) oraz listę kontrolną. Dane napraw i historia czatu są zapisywane lokalnie (SQLite).
+> **ServiceFlow AI** to aplikacja desktopowa (Flutter) dla **serwisu elektroniki ogólnej** (płyty, moduły, urządzenia embedded). Łączy lokalną bazę napraw z **Board_ID** jako głównym identyfikatorem płyty, kreator weryfikacji z wyszukiwaniem kodów PCB przez AI (Groq), interaktywny czat diagnostyczny z analizą obrazu (mikroskop / kamera UVC) oraz **szybkie logowanie pomiarów** (napięcie, rezystancja, prąd). Lista napraw na ekranie głównym korzysta z lekkich zapytań (bez pełnego JSON na wiersz); szczegóły projektu i historia czatu są w SQLite.
 
 ---
 
 ## Czym jest ta aplikacja?
 
-**ServiceFlow AI** wspiera technika w warsztacie przy identyfikacji płyty głównej (kod silkscreen / ODM), zapisie kontekstu naprawy (marka, model, Board ID, komponenty krytyczne) oraz prowadzeniu **sesji diagnostycznej** z modelem językowym. Aplikacja nie jest sklepem — skupia się na diagnozie elektrycznej i pomiarach, bez linków zakupowych.
+**ServiceFlow AI** wspiera technika w warsztacie przy identyfikacji PCB (kod silkscreen / ODM), zapisie kontekstu naprawy (marka, model, **Board_ID**, komponenty krytyczne) oraz prowadzeniu **sesji diagnostycznej** z modelem językowym. Aplikacja nie jest sklepem — skupia się na diagnozie elektrycznej i szybkim wpisywaniu pomiarów, bez linków zakupowych.
 
 ## Stack techniczny
 
 - **Flutter** (Dart SDK ^3.11), UI ciemny z akcentami pomarańczowymi  
-- **SQLite** (`sqflite` / `sqflite_common_ffi` na desktopie) — naprawy, cache wyszukiwań płyt, stan czatu diagnostycznego  
+- **SQLite** (`sqflite` / `sqflite_common_ffi` na desktopie) — naprawy (kolumny indeksowane m.in. `board_id`), log pomiarów `measurement_logs`, cache wyszukiwań płyt, stan czatu diagnostycznego  
 - **Groq API** (OpenAI-compatible) — czat diagnostyczny, profile diagnostyczne, research kodów płyt  
 - **Kamera / mikroskop** — pakiet `camera` + `camera_desktop` (Linux: GStreamer + v4l2 / UVC)  
 - **Zmienne środowiskowe** — `flutter_dotenv`, plik `assets/env/gemini.env` (m.in. `GROQ_API_KEY`)
@@ -23,23 +23,26 @@ Krótki opis aplikacji (np. do wklejenia w **Google Gemini** lub innym czacie ja
 ## Główne funkcjonalności (stan na dziś)
 
 1. **Ekran główny / lista napraw**  
-   - Tworzenie i wybór projektów naprawy z polami: kategoria urządzenia, marka, model, **Board ID** (kod PCB), komponenty (np. CPU, Ethernet, rewizja).
+   - Tworzenie i wybór projektów: kategoria urządzenia, marka, model, **Board_ID** (kod PCB / silkscreen), komponenty krytyczne. Lista ładuje podsumowania bez pełnego dekodowania JSON każdej naprawy.
 
-2. **Kreator weryfikacji płyty (wizard)**  
+2. **Pomiary (ekran „Pomiary”)**  
+   - Szybki zapis napięcia, rezystancji i prądu z wyborem jednostki i etykietą sieci; ostatnie wpisy pod polem — pod kątem pracy „na stojaku” z minimalną liczbą dotknięć.
+
+3. **Kreator weryfikacji płyty (wizard)**  
    - Wyszukiwanie propozycji płyt przez **Groq** na podstawie urządzenia (z cache w SQLite).  
    - Możliwość ręcznego wpisania kodu płyty i kontynuacji do asystenta.
 
-3. **Asystent diagnostyczny (czat)**  
+4. **Asystent diagnostyczny (czat)**  
    - Wieloturowa rozmowa z modelem; **pełna historia** wysyłana w każdym żądaniu.  
-   - Kontekst płyty: marka, model, Board ID, intake — odpowiedzi **po polsku** (JSON z polami dla UI).  
+   - Kontekst płyty: marka, model, Board_ID, intake — odpowiedzi **po polsku** (JSON z polami dla UI).  
    - Tryb wizji: zdjęcia (np. z kamery) analizowane modelem multimodalnym (Groq), w tym **dowód wizualny** z panelu bocznego.  
    - Lista kontrolna generowana z odpowiedzi asystenta.  
    - Panel techniczny (szczegóły pomiarów / lokalizacji) w szufladzie po prawej.
 
-4. **Podgląd na żywo w panelu bocznym**  
+5. **Podgląd na żywo w panelu bocznym**  
    - Lista urządzeń wideo (UVC), podgląd strumienia, przycisk **„Przechwyć obraz”** — klatka trafia do czatu i jest automatycznie analizowana jako dowód wizualny dla bieżącego kroku naprawy.
 
-5. **Persystencja**  
+6. **Persystencja**  
    - Zapis stanu czatu i checklisty per naprawa.
 
 ## Konfiguracja

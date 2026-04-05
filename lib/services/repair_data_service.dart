@@ -69,9 +69,9 @@ You must be factually accurate. 6050A codes are Inventec projects. DA0 codes are
 
 Device context: $device $b $m.
 
-Manufacturer patterns to prefer when applicable:
-- HP laptops: look for codes like 6050AXXXXXXXXX (often Inventec) or DA0XXXXMBXXX (often Quanta).
-- MacBooks: look for 820-XXXX style PCB identifiers on the board.
+Manufacturer patterns to prefer when applicable (examples — any OEM/ODM):
+- Many notebook/mainboard PCBs: codes like 6050A… (often Inventec-class) or DA0… (often Quanta-class).
+- Some OEM boards: 820-XXXX style identifiers on silk-screen.
 
 Respond with JSON only (json_object). Include an array of boards (e.g. under a "boards" key). Each item must have:
 - board_id: the exact silk-screen manufacturer / PCB code only (examples: 6050A2860101, DA0X33MB6H0, 820-1234 — use real codes you infer for this model, not generic placeholders).
