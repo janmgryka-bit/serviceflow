@@ -1,0 +1,33 @@
+---
+description: Po sensownych zmianach — commit i push do GitHub (origin), gdy repo jest gotowe.
+alwaysApply: true
+---
+
+# Git: commit i push w odpowiednim momencie
+
+Właściciel projektu chce, żeby asystent **sam robił `git commit` i `git push`** do zdalnego repozytorium (`origin`), **gdy uzna to za stosowny** — nie po każdej linijce, ale po **zamkniętej porcji pracy** (np. zakończona funkcja, naprawiony błąd, sensowny zestaw plików).
+
+## Kiedy pushować
+
+- Po **ukończeniu** zadania użytkownika lub wyraźnego etapu (feature, fix, refaktor z zamkniętym zakresem).
+- **Nie** commitować w połowie nieukończonej zmiany, jeśli kod się nie kompiluje / nie przechodzi analizy (chyba że użytkownik wyraźnie prosi o WIP).
+- Sprawdzić `git status` — nie dodać plików z sekretami (np. `assets/env/gemini.env` jest w `.gitignore`).
+
+## Komendy (typowy przepływ)
+
+```bash
+git status
+git add -A
+git commit -m "Krótki opis po angielsku lub polsku: co i dlaczego"
+git push -u origin main
+```
+
+Jeśli aktualna gałąź to nie `main`, użyj jej nazwy z `git branch`.
+
+## Gdy push się nie uda
+
+- Brak sieci, DNS, lub brak autoryzacji GitHub w tym środowisku — **poinformuj użytkownika** i podaj dokładne komendy do wykonania lokalnie; nie udawaj, że push przeszedł.
+
+## Bezpieczeństwo
+
+- Nigdy nie commitować kluczy API, haseł, pełnych plików `.env` z sekretami.
