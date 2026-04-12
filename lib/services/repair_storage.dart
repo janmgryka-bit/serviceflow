@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
@@ -7,9 +8,14 @@ import 'package:uuid/uuid.dart';
 
 import '../models/ai_board_research_result.dart';
 import '../models/diagnostic_chat_snapshot.dart';
+import '../models/indexed_web_source.dart';
+import '../models/knowledge_index_result.dart';
+import 'knowledge_pdf_extractor.dart';
+import 'knowledge_url_fetcher.dart';
 import '../models/diagnostic_session_state.dart';
 import '../models/measurement_log_entry.dart';
 import '../models/repair_project.dart';
+import '../models/repair_status.dart';
 import '../models/repair_summary.dart';
 
 Future<void> _createBoardLookupCacheTable(Database db) async {
@@ -61,6 +67,79 @@ Future<void> _createMeasurementLogsTable(Database db) async {
   );
 }
 
+Future<void> _createKnowledgeTables(Database db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS knowledge_meta (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      source_path TEXT NOT NULL,
+      indexed_at INTEGER NOT NULL,
+      chunk_count INTEGER NOT NULL DEFAULT 0
+    )
+  ''');
+  await db.execute('''
+    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+      body,
+      chunk_id UNINDEXED,
+      source_kind UNINDEXED,
+      source_ref UNINDEXED,
+      tokenize = 'unicode61'
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS indexed_web_sources (
+      id TEXT PRIMARY KEY,
+      url TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL DEFAULT '',
+      indexed_at INTEGER NOT NULL,
+      chunk_count INTEGER NOT NULL DEFAULT 0
+    )
+  ''');
+}
+
+/// v7 → v8: FTS z typem źródła (pdf/web) + tabela linków WWW.
+Future<void> _migrateKnowledgeV8(Database db) async {
+  var pdfPath = '';
+  List<Map<String, Object?>> oldRows = [];
+  try {
+    final meta = await db.query('knowledge_meta', where: 'id = ?', whereArgs: [1]);
+    if (meta.isNotEmpty) {
+      pdfPath = meta.first['source_path'] as String? ?? '';
+    }
+    oldRows = await db.rawQuery('SELECT body, chunk_id FROM knowledge_fts');
+  } catch (_) {}
+  await db.execute('DROP TABLE IF EXISTS knowledge_fts');
+  await db.execute('''
+    CREATE VIRTUAL TABLE knowledge_fts USING fts5(
+      body,
+      chunk_id UNINDEXED,
+      source_kind UNINDEXED,
+      source_ref UNINDEXED,
+      tokenize = 'unicode61'
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS indexed_web_sources (
+      id TEXT PRIMARY KEY,
+      url TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL DEFAULT '',
+      indexed_at INTEGER NOT NULL,
+      chunk_count INTEGER NOT NULL DEFAULT 0
+    )
+  ''');
+  if (oldRows.isEmpty) return;
+  final ref = pdfPath.isNotEmpty ? pdfPath : 'pdf';
+  final batch = db.batch();
+  for (final r in oldRows) {
+    batch.insert('knowledge_fts', {
+      'body': r['body'] as String,
+      'chunk_id': r['chunk_id'] as String,
+      'source_kind': 'pdf',
+      'source_ref': ref,
+    });
+  }
+  await batch.commit(noResult: true);
+}
+
 const _prefsLegacyKey = 'repair_projects_v1';
 const _migrationDoneKey = 'repair_db_migrated_v2';
 
@@ -81,7 +160,7 @@ class RepairStorage {
     final path = p.join(dir, 'service_flow_repairs.db');
     _db = await openDatabase(
       path,
-      version: 5,
+      version: 8,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE repairs (
@@ -89,6 +168,8 @@ class RepairStorage {
             created_at INTEGER NOT NULL,
             board_id TEXT,
             device_label TEXT,
+            repair_status TEXT NOT NULL DEFAULT 'inDiagnosis',
+            board_confirmed INTEGER NOT NULL DEFAULT 1,
             payload TEXT NOT NULL
           )
         ''');
@@ -102,6 +183,7 @@ class RepairStorage {
         await _createDiagnosticSessionsTable(db);
         await _createDiagnosticChatTable(db);
         await _createMeasurementLogsTable(db);
+        await _createKnowledgeTables(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -146,6 +228,41 @@ class RepairStorage {
           );
           await _createMeasurementLogsTable(db);
         }
+        if (oldVersion < 6) {
+          try {
+            await db.execute(
+              "ALTER TABLE repairs ADD COLUMN repair_status TEXT DEFAULT 'inDiagnosis'",
+            );
+          } catch (_) {}
+          try {
+            await db.execute(
+              'ALTER TABLE repairs ADD COLUMN board_confirmed INTEGER DEFAULT 1',
+            );
+          } catch (_) {}
+          final rows = await db.query('repairs', columns: ['id', 'payload']);
+          for (final row in rows) {
+            try {
+              final project = RepairProject.fromJson(
+                jsonDecode(row['payload'] as String) as Map<String, dynamic>,
+              );
+              await db.update(
+                'repairs',
+                {
+                  'repair_status': project.repairStatus.name,
+                  'board_confirmed': project.boardIdentityConfirmed ? 1 : 0,
+                },
+                where: 'id = ?',
+                whereArgs: [row['id']],
+              );
+            } catch (_) {}
+          }
+        }
+        if (oldVersion < 7) {
+          await _createKnowledgeTables(db);
+        }
+        if (oldVersion < 8) {
+          await _migrateKnowledgeV8(db);
+        }
       },
     );
     await _migrateFromPrefsOnce(_db!);
@@ -175,6 +292,8 @@ class RepairStorage {
             'created_at': project.createdAt.millisecondsSinceEpoch,
             'board_id': project.boardModelCode,
             'device_label': project.displayTitle,
+            'repair_status': project.repairStatus.name,
+            'board_confirmed': project.boardIdentityConfirmed ? 1 : 0,
             'payload': jsonEncode(project.toJson()),
           },
           conflictAlgorithm: ConflictAlgorithm.ignore,
@@ -191,7 +310,15 @@ class RepairStorage {
     final db = await _database;
     final rows = await db.query(
       'repairs',
-      columns: ['id', 'created_at', 'board_id', 'device_label', 'payload'],
+      columns: [
+        'id',
+        'created_at',
+        'board_id',
+        'device_label',
+        'repair_status',
+        'board_confirmed',
+        'payload',
+      ],
       orderBy: 'created_at DESC',
     );
     final out = <RepairSummary>[];
@@ -200,6 +327,13 @@ class RepairStorage {
       final created = DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int);
       var boardId = r['board_id'] as String?;
       var label = r['device_label'] as String?;
+      RepairStatus rs = RepairStatus.inDiagnosis;
+      var bic = true;
+      final rsRaw = r['repair_status'] as String?;
+      final parsed = repairStatusFromStorage(rsRaw);
+      if (parsed != null) rs = parsed;
+      final bcRaw = r['board_confirmed'];
+      if (bcRaw is int) bic = bcRaw != 0;
       if (boardId == null || boardId.isEmpty) {
         try {
           final project = RepairProject.fromJson(
@@ -207,6 +341,8 @@ class RepairStorage {
           );
           boardId = project.boardModelCode;
           label = project.displayTitle;
+          rs = project.repairStatus;
+          bic = project.boardIdentityConfirmed;
         } catch (_) {
           boardId = '';
           label = '';
@@ -219,6 +355,8 @@ class RepairStorage {
           boardId: boardId,
           deviceLabel: label,
           createdAt: created,
+          repairStatus: rs,
+          boardIdentityConfirmed: bic,
         ),
       );
     }
@@ -267,6 +405,8 @@ class RepairStorage {
         'created_at': project.createdAt.millisecondsSinceEpoch,
         'board_id': project.boardModelCode,
         'device_label': project.displayTitle,
+        'repair_status': project.repairStatus.name,
+        'board_confirmed': project.boardIdentityConfirmed ? 1 : 0,
         'payload': jsonEncode(project.toJson()),
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
@@ -438,5 +578,256 @@ class RepairStorage {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  /// Ostatnio zindeksowany PDF (ścieżka + liczba fragmentów), albo null.
+  Future<KnowledgeSourceMeta?> getKnowledgeSourceMeta() async {
+    final db = await _database;
+    final rows = await db.query('knowledge_meta', where: 'id = ?', whereArgs: [1]);
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    final path = r['source_path'] as String? ?? '';
+    if (path.isEmpty) return null;
+    final count = (r['chunk_count'] as int?) ?? 0;
+    final at = (r['indexed_at'] as int?) ?? 0;
+    return KnowledgeSourceMeta(
+      sourcePath: path,
+      indexedAt: DateTime.fromMillisecondsSinceEpoch(at),
+      chunkCount: count,
+    );
+  }
+
+  /// Indeksuje PDF: czyści poprzedni indeks, zapisuje chunki w FTS5.
+  Future<KnowledgeIndexResult> indexKnowledgePdf(String absolutePath) async {
+    final trimmed = absolutePath.trim();
+    if (trimmed.isEmpty) {
+      return const KnowledgeIndexResult(success: false, message: 'Brak ścieżki do pliku.');
+    }
+    String plain;
+    try {
+      plain = await extractPdfPlainText(trimmed);
+    } catch (e, st) {
+      debugPrint('indexKnowledgePdf extract: $e\n$st');
+      return KnowledgeIndexResult(
+        success: false,
+        message: 'Nie udało się odczytać PDF: $e',
+      );
+    }
+    final chunks = chunkPlainText(plain);
+    if (chunks.isEmpty) {
+      return const KnowledgeIndexResult(
+        success: false,
+        message: 'Brak tekstu w PDF (np. skan bez warstwy tekstu).',
+      );
+    }
+    final db = await _database;
+    try {
+      await db.transaction((txn) async {
+        await txn.execute("DELETE FROM knowledge_fts WHERE source_kind = 'pdf'");
+        await txn.delete('knowledge_meta');
+        final batch = txn.batch();
+        for (final body in chunks) {
+          batch.insert('knowledge_fts', {
+            'body': body,
+            'chunk_id': _uuid.v4(),
+            'source_kind': 'pdf',
+            'source_ref': trimmed,
+          });
+        }
+        await batch.commit(noResult: true);
+        await txn.insert('knowledge_meta', {
+          'id': 1,
+          'source_path': trimmed,
+          'indexed_at': DateTime.now().millisecondsSinceEpoch,
+          'chunk_count': chunks.length,
+        });
+      });
+    } catch (e, st) {
+      debugPrint('indexKnowledgePdf db: $e\n$st');
+      return KnowledgeIndexResult(
+        success: false,
+        message: 'Błąd zapisu indeksu: $e',
+      );
+    }
+    return KnowledgeIndexResult(success: true, chunkCount: chunks.length);
+  }
+
+  /// Wyszukuje fragmenty pasujące do zapytania (ostatnia wiadomość użytkownika / kontekst).
+  Future<List<String>> searchKnowledgeForPrompt(
+    String queryText, {
+    int limit = 6,
+  }) async {
+    final q = _ftsQueryFromUserInput(queryText);
+    if (q == null) return [];
+    final db = await _database;
+    try {
+      final rows = await db.rawQuery(
+        'SELECT body FROM knowledge_fts WHERE knowledge_fts MATCH ? LIMIT ?',
+        [q, limit],
+      );
+      return rows.map((r) => r['body'] as String).toList();
+    } catch (e, st) {
+      debugPrint('searchKnowledgeForPrompt: $e\n$st');
+      return [];
+    }
+  }
+
+  /// Usuwa lokalny indeks (meta + FTS + linki WWW).
+  Future<void> clearKnowledgeBase() async {
+    final db = await _database;
+    await db.execute('DELETE FROM knowledge_fts');
+    await db.delete('knowledge_meta');
+    await db.delete('indexed_web_sources');
+  }
+
+  /// Usuwa tylko fragmenty z PDF (linki WWW zostają).
+  Future<void> clearKnowledgePdfOnly() async {
+    final db = await _database;
+    await db.execute("DELETE FROM knowledge_fts WHERE source_kind = 'pdf'");
+    await db.delete('knowledge_meta');
+  }
+
+  Future<List<IndexedWebSource>> listIndexedWebSources() async {
+    final db = await _database;
+    final rows = await db.query('indexed_web_sources', orderBy: 'indexed_at DESC');
+    return rows
+        .map(
+          (r) => IndexedWebSource(
+            id: r['id'] as String,
+            url: r['url'] as String,
+            title: r['title'] as String? ?? '',
+            indexedAt: DateTime.fromMillisecondsSinceEpoch(r['indexed_at'] as int),
+            chunkCount: (r['chunk_count'] as int?) ?? 0,
+          ),
+        )
+        .toList();
+  }
+
+  /// Pobiera HTML, wycina tekst, zapisuje chunki pod wyszukiwanie RAG.
+  Future<KnowledgeIndexResult> indexKnowledgeUrl(String rawUrl) async {
+    final normalized = _normalizeKnowledgeUrl(rawUrl);
+    if (normalized == null) {
+      return const KnowledgeIndexResult(
+        success: false,
+        message: 'Nieprawidłowy adres URL (dodaj https://).',
+      );
+    }
+    String plain;
+    String title;
+    try {
+      final fetched = await fetchUrlPlainText(normalized);
+      plain = fetched.text;
+      title = fetched.title;
+    } catch (e, st) {
+      debugPrint('indexKnowledgeUrl fetch: $e\n$st');
+      return KnowledgeIndexResult(
+        success: false,
+        message: 'Nie udało się pobrać strony: $e',
+      );
+    }
+    final chunks = chunkPlainText(plain);
+    if (chunks.isEmpty) {
+      return const KnowledgeIndexResult(
+        success: false,
+        message: 'Brak tekstu do indeksu (pusta strona lub wyłącznie skrypty).',
+      );
+    }
+    final id = _uuid.v4();
+    final db = await _database;
+    try {
+      await db.transaction((txn) async {
+        await txn.execute(
+          'DELETE FROM knowledge_fts WHERE source_kind = ? AND source_ref = ?',
+          ['web', normalized],
+        );
+        await txn.delete(
+          'indexed_web_sources',
+          where: 'url = ?',
+          whereArgs: [normalized],
+        );
+        final batch = txn.batch();
+        for (final body in chunks) {
+          batch.insert('knowledge_fts', {
+            'body': body,
+            'chunk_id': _uuid.v4(),
+            'source_kind': 'web',
+            'source_ref': normalized,
+          });
+        }
+        await batch.commit(noResult: true);
+        await txn.insert('indexed_web_sources', {
+          'id': id,
+          'url': normalized,
+          'title': title,
+          'indexed_at': DateTime.now().millisecondsSinceEpoch,
+          'chunk_count': chunks.length,
+        });
+      });
+    } catch (e, st) {
+      debugPrint('indexKnowledgeUrl db: $e\n$st');
+      return KnowledgeIndexResult(
+        success: false,
+        message: 'Błąd zapisu indeksu: $e',
+      );
+    }
+    return KnowledgeIndexResult(success: true, chunkCount: chunks.length);
+  }
+
+  Future<void> deleteIndexedWebSource(String id) async {
+    final db = await _database;
+    final rows = await db.query(
+      'indexed_web_sources',
+      columns: ['url'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final url = rows.first['url'] as String;
+    await db.transaction((txn) async {
+      await txn.execute(
+        'DELETE FROM knowledge_fts WHERE source_kind = ? AND source_ref = ?',
+        ['web', url],
+      );
+      await txn.delete('indexed_web_sources', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  String? _normalizeKnowledgeUrl(String raw) {
+    var s = raw.trim();
+    if (s.isEmpty) return null;
+    if (!s.contains('://')) s = 'https://$s';
+    final u = Uri.tryParse(s);
+    if (u == null || !u.hasScheme || u.host.isEmpty) return null;
+    if (u.scheme != 'http' && u.scheme != 'https') return null;
+    return u.toString();
+  }
+
+  /// Usuwa naprawę i powiązane sesje / pomiary / czat.
+  Future<void> deleteRepair(String id) async {
+    final db = await _database;
+    await db.transaction((txn) async {
+      await txn.delete('measurement_logs', where: 'repair_id = ?', whereArgs: [id]);
+      await txn.delete('diagnostic_sessions', where: 'repair_id = ?', whereArgs: [id]);
+      await txn.delete('diagnostic_chat', where: 'repair_id = ?', whereArgs: [id]);
+      await txn.delete('repairs', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  static String? _ftsQueryFromUserInput(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final re = RegExp(r'[\w\u0100-\u017F]+', unicode: true);
+    final words = re
+        .allMatches(trimmed)
+        .map((m) => m.group(0)!)
+        .where((w) => w.length >= 2)
+        .take(12)
+        .toList();
+    if (words.isEmpty) return null;
+    return words.map((w) {
+      final escaped = w.replaceAll('"', '""');
+      return '"$escaped"';
+    }).join(' AND ');
   }
 }

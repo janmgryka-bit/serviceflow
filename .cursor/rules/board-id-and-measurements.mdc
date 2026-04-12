@@ -1,0 +1,25 @@
+---
+description: Flutter ServiceFlow — Board ID, modele pomiarów, spójność z lib/models
+alwaysApply: true
+---
+
+# Board ID i logika pomiarów (Flutter)
+
+## Kontekst projektu
+- Przed proponowaniem zmian **przejrzyj repozytorium** (`@Codebase` / wyszukiwanie po ścieżkach), żeby nie dublować pól ani łamać migracji SQLite.
+- **Nie wprowadzaj nowych „źródeł prawdy”** dla identyfikatora płyty poza ustalonym modelem.
+
+## Board ID (kanonicznie)
+- W `RepairProject` pole przechowywane w JSON/SQLite to **`boardModelCode`**.
+- Publiczny alias semantyczny: getter **`boardId`** → zwraca `boardModelCode` (ten sam string).
+- Lista/DB: kolumna `board_id` w tabeli `repairs` jest zsynchronizowana z `boardModelCode` przy zapisie — nowe ekrany powinny używać tych samych nazw w UI („Board ID”) bez dodawania osobnego pola w modelu, chyba że zmienisz schemat świadomie i z migracją.
+
+## Pomiary (Measurement Logic)
+- **`MeasurementKind`**: `voltage` | `resistance` | `current` — rozszerzenia enum wymagają aktualizacji serializacji, UI i zapytań SQL.
+- **`MeasurementLogEntry`**: `repairId` wiąże wpis z naprawą; `value` w jednostkach bazowych (V, Ω, A); `unit` jako wyświetlany opis; `netLabel` = sieć/punkt pomiaru; opcjonalnie `note`.
+- Persystencja: `RepairStorage` (tabela `measurement_logs`). Zmiany w kształcie danych = migracja wersji bazy + test ścieżek zapisu/odczytu.
+
+## Przed sugestią zmian w kodzie
+1. Sprawdź **`lib/models/`** (szczególnie `repair_project.dart`, `measurement_log_entry.dart`, `repair_summary.dart`).
+2. Sprawdź **`lib/services/repair_storage.dart`** pod kątem wersji schematu i zapytań.
+3. Dopiero wtedy proponuj refaktory lub nowe pola — **spójnie z istniejącymi typami**.

@@ -5,9 +5,10 @@ import 'package:flutter/material.dart';
 import '../models/ai_board_research_result.dart';
 import '../models/critical_chip_entry.dart';
 import '../models/repair_project.dart';
+import '../models/repair_status.dart';
 import '../services/repair_data_service.dart';
 import '../services/repair_storage.dart';
-import 'diagnostic_dashboard_screen.dart';
+import 'board_identity_confirmation_screen.dart';
 
 class VerificationWizardScreen extends StatefulWidget {
   const VerificationWizardScreen({super.key});
@@ -40,7 +41,8 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
   bool _saving = false;
 
   final _hwPcbCodeCtrl = TextEditingController();
-  final _hwCpuGenerationCtrl = TextEditingController();
+  /// Opcjonalny dopisek w kroku wariantów (gdy lista nie pokrywa egzemplarza).
+  final _variantClarificationCtrl = TextEditingController();
   final _hwPcbFocusNode = FocusNode();
 
   bool _hwPcbSeen = false;
@@ -53,8 +55,11 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
 
   void _clearHardwareFinalFields() {
     _hwPcbCodeCtrl.clear();
-    _hwCpuGenerationCtrl.clear();
     _resetHardwareChecklist();
+  }
+
+  void _clearVariantStepExtras() {
+    _variantClarificationCtrl.clear();
   }
 
   /// Manual PCB field on board step (before hardware confirmation).
@@ -104,6 +109,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
     _selectedBoard = null;
     _variantSelections.clear();
     _manualPcbOverrideCtrl.clear();
+    _clearVariantStepExtras();
     _clearHardwareFinalFields();
   }
 
@@ -189,6 +195,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
         _selectedBoard = null;
         _variantSelections.clear();
         _manualPcbOverrideCtrl.clear();
+        _clearVariantStepExtras();
         _clearHardwareFinalFields();
       });
     } on RepairDataException catch (e) {
@@ -257,6 +264,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
         _selectedBoard = null;
         _variantSelections.clear();
         _manualPcbOverrideCtrl.clear();
+        _clearVariantStepExtras();
         _clearHardwareFinalFields();
         _aiLookupLoading = false;
       });
@@ -312,7 +320,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
     _chatCtrl.dispose();
     _manualPcbOverrideCtrl.dispose();
     _hwPcbCodeCtrl.dispose();
-    _hwCpuGenerationCtrl.dispose();
+    _variantClarificationCtrl.dispose();
     _hwPcbFocusNode.dispose();
     super.dispose();
   }
@@ -376,8 +384,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
   bool get _stepHardwareValid {
     return _hwPcbSeen &&
         _hwEthernetChoice != null &&
-        _hwPcbCodeCtrl.text.trim().isNotEmpty &&
-        _hwCpuGenerationCtrl.text.trim().isNotEmpty;
+        _hwPcbCodeCtrl.text.trim().isNotEmpty;
   }
 
   bool get _stepVariantValid {
@@ -434,26 +441,28 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
           value: _finalPcbSilkScreen,
         ),
       );
-      out.add(
-        CriticalChipEntry(
-          label: 'CPU generation (final)',
-          value: _hwCpuGenerationCtrl.text.trim(),
-        ),
-      );
       for (final v in board.variants) {
         final choice = _variantSelections[v.id];
         if (choice != null && choice.isNotEmpty) {
           out.add(CriticalChipEntry(label: v.title, value: choice));
         }
       }
-      final cpuFinal = _hwCpuGenerationCtrl.text.trim();
+      final clar = _variantClarificationCtrl.text.trim();
+      if (clar.isNotEmpty) {
+        out.add(
+          CriticalChipEntry(
+            label: 'Uzupełnienie ręczne (opcjonalne)',
+            value: clar,
+          ),
+        );
+      }
       final pcbSaved = _finalPcbSilkScreen;
       final ethSaved = _hwEthernetChoice ?? '';
       out.add(
         CriticalChipEntry(
-          label: 'Hardware confirmation',
-          value:
-              'PCB silk-screen verified: $pcbSaved; Ethernet PHY: $ethSaved; CPU: $cpuFinal',
+          label: 'Potwierdzenie sprzętu',
+          value: 'PCB (laminat): $pcbSaved; Ethernet PHY: $ethSaved'
+              '${clar.isNotEmpty ? '; dopisek: $clar' : ''}',
         ),
       );
     }
@@ -481,6 +490,8 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
       boardModelCode: pcbFinal,
       components: _collectComponents(),
       createdAt: DateTime.now(),
+      repairStatus: RepairStatus.open,
+      boardIdentityConfirmed: false,
     );
 
     await RepairStorage.instance.saveRepair(project);
@@ -489,7 +500,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
 
     await Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (context) => DiagnosticDashboardScreen(repair: project),
+        builder: (context) => BoardIdentityConfirmationScreen(repair: project),
       ),
     );
   }
@@ -572,7 +583,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
                                   ),
                                 )
                               : const Text(
-                                  'Create repair & open assistant',
+                                  'Utwórz naprawę i przejdź dalej',
                                   style: TextStyle(fontWeight: FontWeight.bold),
                                 ),
                         )
@@ -802,8 +813,10 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
                   ),
                 ),
                 Step(
-                  title: const Text('Variant confirmation'),
-                  subtitle: const Text('Confirm options, then create the repair'),
+                  title: const Text('Potwierdzenie wariantów'),
+                  subtitle: const Text(
+                    'Wybierz opcje zgodne z Twoją płytą — potem utworzymy naprawę',
+                  ),
                   isActive: _step >= 3,
                   state: StepState.indexed,
                   content: Align(
@@ -898,7 +911,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
           onChanged: (_) {
             setState(() {
               _hwPcbCodeCtrl.clear();
-              _hwCpuGenerationCtrl.clear();
+              _clearVariantStepExtras();
               _resetHardwareChecklist();
             });
           },
@@ -996,25 +1009,15 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
         ),
         const SizedBox(height: 16),
         const Text(
-          'CPU generation',
-          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          'Procesor i inne różnice rewizji wybierzesz w następnym kroku z list — '
+          'tam nie będzie drugiego, sprzecznego pola „z palca”.',
+          style: TextStyle(color: Colors.grey, fontSize: 13, height: 1.35),
         ),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _hwCpuGenerationCtrl,
-          decoration: const InputDecoration(
-            hintText: 'e.g. i5 6th Gen — change to i3 6th Gen if that is what you see',
-            border: OutlineInputBorder(),
-            helperText:
-                'Type the exact CPU generation you confirm on the unit; overrides any AI guess.',
-          ),
-          onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
         if (!_stepHardwareValid)
           const Text(
-            'Fill PCB code and CPU, confirm the checkbox, pick Ethernet, '
-            'then “Start Project” unlocks.',
+            'Uzupełnij kod PCB, zaznacz widoczność na laminacie, wybierz Ethernet '
+            '— wtedy odblokuje się „Dalej”.',
             style: TextStyle(color: Colors.orangeAccent, fontSize: 13),
           ),
       ],
@@ -1036,7 +1039,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
               _variantSelections.clear();
               _boardCodeCtrl.text = board.boardCode;
               _hwPcbCodeCtrl.clear();
-              _hwCpuGenerationCtrl.clear();
+              _clearVariantStepExtras();
               _resetHardwareChecklist();
             });
           },
@@ -1139,7 +1142,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
         ),
         const SizedBox(height: 20),
         const Text(
-          'Confirm variants',
+          'Dopasowanie do Twojej płyty',
           style: TextStyle(
             fontWeight: FontWeight.w600,
             fontSize: 15,
@@ -1147,6 +1150,33 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
         ),
         const SizedBox(height: 12),
         ...board.variants.map(_buildVariantQuestion),
+        const SizedBox(height: 20),
+        const Text(
+          'Uzupełnienie (tylko jeśli trzeba)',
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 15,
+            color: Colors.orange,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Jeśli żadna opcja powyżej nie pasuje do Twojego egzemplarza, dopisz tu '
+          'np. dokładny model CPU z naklejki. Zostaw puste, gdy wystarczy wybór z listy.',
+          style: TextStyle(color: Colors.grey, fontSize: 12, height: 1.35),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _variantClarificationCtrl,
+          minLines: 1,
+          maxLines: 3,
+          onChanged: (_) => setState(() {}),
+          decoration: const InputDecoration(
+            labelText: 'Dopisek ręczny (opcjonalnie)',
+            hintText: 'np. i3-7100U, inna rewizja niż na liście…',
+            border: OutlineInputBorder(),
+          ),
+        ),
         const SizedBox(height: 20),
         const Text(
           'Visual aid — board ID location',
@@ -1160,7 +1190,7 @@ class _VerificationWizardScreenState extends State<VerificationWizardScreen> {
         const SizedBox(height: 16),
         if (!_stepVariantValid)
           const Text(
-            'Answer each question above to enable “Create repair”.',
+            'Odpowiedz na każde pytanie powyżej, aby odblokować przycisk.',
             style: TextStyle(color: Colors.orangeAccent, fontSize: 13),
           ),
         const SizedBox(height: 8),

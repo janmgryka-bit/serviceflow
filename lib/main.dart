@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'screens/home_screen.dart';
@@ -9,6 +10,9 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await dotenv.load(fileName: 'assets/env/gemini.env');
+
+  // Wymagane przez pdfrx przy PdfDocument.openFile (cache / pdfium).
+  await pdfrxFlutterInitialize();
 
   if (!kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.linux ||

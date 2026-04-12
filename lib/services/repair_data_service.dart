@@ -21,6 +21,9 @@ class RepairDataException implements Exception {
 class RepairDataService {
   RepairDataService._();
 
+  /// Zmień przy istotnej zmianie promptu / formatu `variants`, żeby odświeżyć cache SQLite.
+  static const String _boardLookupPromptVersion = 'v3';
+
   static const String _groqChatCompletionsUrl =
       'https://api.groq.com/openai/v1/chat/completions';
 
@@ -39,7 +42,7 @@ class RepairDataService {
       throw RepairDataException('Device, brand, and model are required.');
     }
 
-    final modelKey = normalizeModelKey(combined);
+    final modelKey = '${normalizeModelKey(combined)}|$_boardLookupPromptVersion';
     final today = _todayLocalDateString();
     final cached = await RepairStorage.instance.getBoardLookupCache(
       modelKey,
@@ -63,21 +66,29 @@ class RepairDataService {
     print('DEBUG URL: $_groqChatCompletionsUrl');
 
     final userContent = '''
-You are a board-level repair technician. I need the PCB model code printed directly on the silk-screen — not HP spare part numbers, not Apple part numbers unless they are the silk-screen PCB code. Focus on OEM/ODM manufacturer codes (Inventec, Quanta, Foxconn, etc.), not retail FRU/SKU strings.
+You are a board-level repair technician. I need the PCB model code printed directly on the silk-screen — not retail FRU/SKU unless that is the silk-screen code. Focus on OEM/ODM manufacturer codes (Inventec, Quanta, Foxconn, etc.).
 
-You must be factually accurate. 6050A codes are Inventec projects. DA0 codes are Quanta. If you are unsure about the project name (like Clooney/Kasan), prioritize the PCB code (6050A…) as the primary ID — put that exact silk-screen code in board_id; do not guess whimsical project nicknames. board_name should only be a project name you are confident about from reliable mapping; otherwise prefer a neutral description tied to the PCB family.
+You must be factually accurate. 6050A codes are Inventec-class projects. DA0 codes are Quanta-class. Prioritize the exact silk-screen code in board_id; do not invent whimsical project nicknames. board_name: only if you are confident; else neutral PCB-family wording.
 
 Device context: $device $b $m.
 
-Manufacturer patterns to prefer when applicable (examples — any OEM/ODM):
-- Many notebook/mainboard PCBs: codes like 6050A… (often Inventec-class) or DA0… (often Quanta-class).
-- Some OEM boards: 820-XXXX style identifiers on silk-screen.
+Manufacturer patterns (examples — any OEM/ODM): 6050A…, DA0…, 820-XXXX on silk-screen.
 
-Respond with JSON only (json_object). Include an array of boards (e.g. under a "boards" key). Each item must have:
-- board_id: the exact silk-screen manufacturer / PCB code only (examples: 6050A2860101, DA0X33MB6H0, 820-1234 — use real codes you infer for this model, not generic placeholders).
-- board_name: the internal project / platform name (e.g. CLOONEY), not a marketing name.
-- variants: strings describing hardware differences; you MUST check for integrated vs dedicated GPU and include UMA (integrated graphics) and/or DIS (dedicated GPU) in this list when relevant, plus any other known rev variants.
-- id_location: where on the PCB this code is typically printed.
+Respond with JSON only (json_object). Include an array of boards (e.g. under "boards"). Each item MUST have:
+- board_id: exact silk-screen / manufacturer PCB code (real codes for this model, not placeholders).
+- board_name: internal platform name if known, else short neutral label.
+- id_location: where the code is usually printed on the PCB.
+
+CRITICAL — "variants" for the repair wizard UI (technicians are NOT engineers; all user-facing text in POLISH):
+- variants MUST be an ARRAY OF OBJECTS (not bare strings like "UMA" or "DIS").
+- Each object MUST have:
+  - "question": one clear Polish question (what must the user decide?) e.g. "Jaki procesor jest na tej płycie w Twoim egzemplarzu?" or "Jaka jest konfiguracja grafiki?".
+  - "hint": optional Polish sentence — WHERE to look (silkscreen near CPU socket, sticker, area next to GPU/heatsink, etc.).
+  - "options": array of 2–6 Polish choices the user taps — FULL PHRASES, not abbreviations alone.
+    Examples of GOOD options: "Intel Core i3 (szósta generacja)", "Intel Core i5 (szósta generacja)", "Inny CPU / nie wiem".
+    For graphics: use plain Polish like "Tylko grafika w procesorze (bez osobnego układu GPU)" vs "Jest osobny chip graficzny (np. obok procesora)" vs "Nie wiem — sprawdzę na płycie".
+    NEVER output options that are only "UMA" or "DIS" without explaining meaning.
+- Include separate questions when both CPU tier AND graphics type differ between revisions for this board_id. Skip irrelevant questions for this device category.
 
 Raw JSON only, no markdown.''';
 
@@ -203,9 +214,9 @@ Raw JSON only, no markdown.''';
       variants: [
         AiCriticalVariant(
           id: '${slug}_confirm',
-          title: 'Hardware check',
-          label: 'Does this board ID match your unit?',
-          options: ['Yes', 'No / unsure'],
+          title: 'Dopasowanie płyty',
+          label: 'Czy ten Board ID zgadza się z kodem na Twoim laminacie?',
+          options: ['Tak', 'Nie / nie jestem pewien'],
         ),
       ],
     );
@@ -319,7 +330,6 @@ Raw JSON only, no markdown.''';
       final boardId = _readString(map, const ['board_id', 'boardId', 'id']);
       final boardName = _readString(map, const ['board_name', 'boardName', 'name']);
       final idLocation = _readString(map, const ['id_location', 'idLocation', 'location']);
-      final variantsRaw = _readVariantsList(map);
 
       if (boardId == null ||
           boardId.isEmpty ||
@@ -332,15 +342,15 @@ Raw JSON only, no markdown.''';
 
       final slug = _safeId(boardId, 'board', i);
       final displayName = '$boardName ($boardId)';
-      final variants = _chipStringsToVariants(slug, variantsRaw);
+      var variants = _parseVariantsField(slug, map['variants']);
 
       if (variants.isEmpty) {
         variants.add(
           AiCriticalVariant(
             id: '${slug}_confirm',
-            title: 'Hardware check',
-            label: 'Does this unit match this board revision?',
-            options: ['Yes', 'No / unsure'],
+            title: 'Dopasowanie płyty',
+            label: 'Czy ta karta odpowiada Twojej fizycznej płycie (kod laminatu / rewizja)?',
+            options: ['Tak', 'Nie / nie jestem pewien'],
           ),
         );
       }
@@ -371,7 +381,88 @@ Raw JSON only, no markdown.''';
     );
   }
 
-  /// Each chip string → selectable variant (split on " vs " when present).
+  /// Nowy format: lista obiektów {question, hint, options[]} po polsku; stary: stringi lub "A vs B".
+  static List<AiCriticalVariant> _parseVariantsField(
+    String boardSlug,
+    dynamic raw,
+  ) {
+    if (raw == null) return [];
+    if (raw is String && raw.trim().isNotEmpty) {
+      return _chipStringsToVariants(boardSlug, [raw]);
+    }
+    if (raw is! List) return [];
+
+    final out = <AiCriticalVariant>[];
+    final list = raw;
+    for (var i = 0; i < list.length; i++) {
+      final e = list[i];
+      if (e is Map) {
+        final v = _structuredVariantFromMap(
+          boardSlug,
+          i,
+          Map<String, dynamic>.from(e),
+        );
+        if (v != null) out.add(v);
+      } else {
+        final s = e?.toString().trim() ?? '';
+        if (s.isNotEmpty) {
+          out.addAll(_chipStringsToVariants('${boardSlug}_s$i', [s]));
+        }
+      }
+    }
+    return out;
+  }
+
+  static AiCriticalVariant? _structuredVariantFromMap(
+    String boardSlug,
+    int index,
+    Map<String, dynamic> m,
+  ) {
+    final q = _readString(m, const [
+      'question',
+      'question_pl',
+      'pytanie',
+      'title',
+    ]);
+    if (q == null || q.isEmpty) return null;
+
+    final hint = _readString(m, const [
+      'hint',
+      'help',
+      'podpowiedz',
+      'opis',
+      'label',
+      'description',
+    ]);
+
+    final optsRaw = m['options'];
+    final options = <String>[];
+    if (optsRaw is List) {
+      for (final o in optsRaw) {
+        final t = o?.toString().trim() ?? '';
+        if (t.isNotEmpty) options.add(t);
+      }
+    }
+    if (options.length < 2) {
+      options
+        ..clear()
+        ..add('Tak — pasuje do mojego egzemplarza')
+        ..add('Nie / inaczej / nie wiem');
+    }
+
+    final id = _readString(m, const ['id', 'key']) ?? '${boardSlug}_q_$index';
+
+    return AiCriticalVariant(
+      id: id,
+      title: q,
+      label: (hint != null && hint.isNotEmpty)
+          ? hint
+          : 'Wybierz opcję zgodną z tym, co widzisz na płycie, naklejkach lub w dokumentacji.',
+      options: options,
+    );
+  }
+
+  /// Legacy: każdy string → wariant (split na " vs " → dwie opcje).
   static List<AiCriticalVariant> _chipStringsToVariants(
     String boardSlug,
     List<String> chips,
@@ -388,7 +479,7 @@ Raw JSON only, no markdown.''';
         out.add(
           AiCriticalVariant(
             id: '${boardSlug}_chip_$i',
-            title: 'Chip / variant ${i + 1}',
+            title: 'Wybór ${i + 1}',
             label: s,
             options: [a, rest],
           ),
@@ -397,29 +488,15 @@ Raw JSON only, no markdown.''';
         out.add(
           AiCriticalVariant(
             id: '${boardSlug}_chip_$i',
-            title: 'Chip ${i + 1}',
-            label: 'Present on board: $s',
-            options: ['Present / expected', 'Different / missing'],
+            title: 'Oznaczenie ${i + 1}',
+            label:
+                'Na płycie / w opisie występuje: „$s” — czy u Ciebie tak jest?',
+            options: ['Tak, pasuje', 'Nie / u mnie inaczej'],
           ),
         );
       }
     }
     return out;
-  }
-
-  static List<String> _readVariantsList(Map<String, dynamic> b) {
-    final v = b['variants'];
-    if (v is List) {
-      return v.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList();
-    }
-    if (v is String && v.trim().isNotEmpty) {
-      return v
-          .split(RegExp(r'[,;\n]'))
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-    }
-    return [];
   }
 
   static String? _readString(Map<String, dynamic> m, List<String> keys) {

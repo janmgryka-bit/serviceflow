@@ -8,6 +8,7 @@ class DiagnosticChatSnapshot {
     required this.technicalPreview,
     required this.chatMode,
     required this.sessionComplete,
+    this.diagnosticPhase,
   });
 
   final List<DiagnosticChatMessage> messages;
@@ -16,7 +17,10 @@ class DiagnosticChatSnapshot {
   final bool chatMode;
   final bool sessionComplete;
 
-  static const int schemaVersion = 1;
+  /// Wartość z [diagnosticPhaseToApi] — etap procedury warsztatowej.
+  final String? diagnosticPhase;
+
+  static const int schemaVersion = 2;
 
   Map<String, dynamic> toJson() => {
         'schemaVersion': schemaVersion,
@@ -25,6 +29,7 @@ class DiagnosticChatSnapshot {
         'technicalPreview': technicalPreview,
         'chatMode': chatMode,
         'sessionComplete': sessionComplete,
+        if (diagnosticPhase != null) 'diagnosticPhase': diagnosticPhase,
       };
 
   factory DiagnosticChatSnapshot.fromJson(Map<String, dynamic> json) {
@@ -44,6 +49,7 @@ class DiagnosticChatSnapshot {
       technicalPreview: json['technicalPreview'] as String? ?? '',
       chatMode: json['chatMode'] as bool? ?? true,
       sessionComplete: json['sessionComplete'] as bool? ?? false,
+      diagnosticPhase: json['diagnosticPhase'] as String?,
     );
   }
 
@@ -54,6 +60,7 @@ class DiagnosticChatSnapshot {
       technicalPreview: '',
       chatMode: true,
       sessionComplete: false,
+      diagnosticPhase: null,
     );
   }
 }

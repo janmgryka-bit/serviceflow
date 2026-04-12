@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../models/repair_status.dart';
 import '../models/repair_summary.dart';
 import '../services/repair_storage.dart';
+import 'board_identity_confirmation_screen.dart';
 import 'diagnostic_dashboard_screen.dart';
-import 'measurements_quick_screen.dart';
+import 'repair_edit_screen.dart';
+import 'settings_screen.dart';
 import 'verification_wizard_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -28,16 +31,71 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<void> _openRepair(String id, {required bool measurements}) async {
+  Future<void> _openRepair(String id) async {
     final repair = await RepairStorage.instance.getRepairById(id);
     if (!mounted || repair == null) return;
+    if (!repair.boardIdentityConfirmed) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (context) => BoardIdentityConfirmationScreen(
+            repair: repair,
+            nextAfterConfirmation: NextAfterConfirmation.diagnostic,
+          ),
+        ),
+      );
+      _refresh();
+      return;
+    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (context) => measurements
-            ? MeasurementsQuickScreen(repair: repair)
-            : DiagnosticDashboardScreen(repair: repair),
+        builder: (context) => DiagnosticDashboardScreen(repair: repair),
       ),
     );
+    _refresh();
+  }
+
+  Future<void> _editRepair(String id) async {
+    final project = await RepairStorage.instance.getRepairById(id);
+    if (!mounted || project == null) return;
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (context) => RepairEditScreen(project: project),
+      ),
+    );
+    if (changed == true) _refresh();
+  }
+
+  Future<void> _deleteRepair(RepairSummary r) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Usunąć naprawę?'),
+        content: Text(
+          'Board ID: ${r.boardId.isEmpty ? '—' : r.boardId}\n'
+          '${r.deviceLabel}\n\n'
+          'Zostaną usunięte też czat diagnostyczny i pomiary dla tej naprawy.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Anuluj'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Usuń'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await RepairStorage.instance.deleteRepair(r.id);
+    _refresh();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Naprawa usunięta.')),
+      );
+    }
   }
 
   @override
@@ -46,6 +104,19 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('ServiceFlow AI'),
         backgroundColor: const Color(0xFF1F1F1F),
+        actions: [
+          IconButton(
+            tooltip: 'Ustawienia',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () async {
+              await Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (context) => const SettingsScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -115,6 +186,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   itemBuilder: (context, index) {
                     final r = items[index];
                     final bid = r.boardId.isEmpty ? '—' : r.boardId;
+                    final statusLine =
+                        '${r.repairStatus.labelPl}${r.boardIdentityConfirmed ? '' : ' · czeka na potwierdzenie'}';
                     return ListTile(
                       title: Text(
                         bid,
@@ -126,24 +199,43 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       subtitle: Text(
                         '${r.deviceLabel}\n'
+                        '$statusLine · '
                         '${r.createdAt.toLocal().toString().split('.').first}',
                         style:
                             const TextStyle(color: Colors.grey, fontSize: 12),
                       ),
                       isThreeLine: true,
                       leading: const Icon(Icons.memory_outlined),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: 'Pomiary (szybki wpis)',
-                            icon: const Icon(Icons.speed),
-                            onPressed: () => _openRepair(r.id, measurements: true),
+                      onTap: () => _openRepair(r.id),
+                      trailing: PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert),
+                        onSelected: (value) async {
+                          if (value == 'edit') await _editRepair(r.id);
+                          if (value == 'delete') await _deleteRepair(r);
+                        },
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: 'edit',
+                            child: Row(
+                              children: [
+                                Icon(Icons.edit_outlined, size: 20),
+                                SizedBox(width: 12),
+                                Text('Edytuj'),
+                              ],
+                            ),
                           ),
-                          const Icon(Icons.chevron_right),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Row(
+                              children: [
+                                Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                                SizedBox(width: 12),
+                                Text('Usuń', style: TextStyle(color: Colors.redAccent)),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
-                      onTap: () => _openRepair(r.id, measurements: false),
                     );
                   },
                 );

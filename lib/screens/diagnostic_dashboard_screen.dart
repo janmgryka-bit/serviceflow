@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 
 import '../models/diagnostic_chat_message.dart';
 import '../models/diagnostic_chat_snapshot.dart';
+import '../models/diagnostic_phase.dart';
 import '../models/repair_project.dart';
+import '../models/repair_status.dart';
 import '../services/diagnostic_chat_service.dart';
+import '../services/diagnostic_workflow_template.dart';
 import '../services/repair_storage.dart';
 import '../widgets/diagnostic_drawer_camera_panel.dart';
 import '../widgets/microscope_chat_image.dart';
@@ -23,6 +26,8 @@ class DiagnosticDashboardScreen extends StatefulWidget {
 }
 
 class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
+  late RepairProject _repair;
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final List<DiagnosticChatMessage> _messages = [];
   final List<String> _checklist = [];
@@ -35,15 +40,45 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
   bool _loading = true;
   bool _sending = false;
 
+  DiagnosticPhase _phase = DiagnosticPhase.powerInput;
+  int _measurementCount = 0;
+
   @override
   void initState() {
     super.initState();
+    _repair = widget.repair;
     _bootstrap();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshMeasurementCount());
+  }
+
+  Future<void> _refreshMeasurementCount() async {
+    final n =
+        await RepairStorage.instance.listMeasurements(_repair.id, limit: 5000);
+    if (!mounted) return;
+    setState(() => _measurementCount = n.length);
+  }
+
+  Future<void> _openMeasurementsQuick() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) => MeasurementsQuickScreen(repair: _repair),
+      ),
+    );
+    await _refreshMeasurementCount();
+  }
+
+  /// Szablon VIN→szyny + unikalne wpisy z AI (tylko przy świeżej sesji).
+  List<String> _mergeSeedWithAi(List<String> seed, List<String> ai) {
+    final out = <String>[...seed];
+    for (final x in ai) {
+      if (!out.contains(x)) out.add(x);
+    }
+    return out;
   }
 
   Future<void> _bootstrap() async {
     final saved =
-        await RepairStorage.instance.getDiagnosticChatSnapshot(widget.repair.id);
+        await RepairStorage.instance.getDiagnosticChatSnapshot(_repair.id);
     if (!mounted) return;
     if (saved != null && saved.messages.isNotEmpty) {
       setState(() {
@@ -52,6 +87,8 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
         _technicalPreview = saved.technicalPreview;
         _chatMode = saved.chatMode;
         _sessionComplete = saved.sessionComplete;
+        _phase = diagnosticPhaseFromApi(saved.diagnosticPhase) ??
+            DiagnosticPhase.powerInput;
         _loading = false;
       });
       _scrollToBottom();
@@ -76,8 +113,9 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
       _sessionComplete = false;
     });
     try {
-      final turn = await DiagnosticChatService.startSession(widget.repair);
+      final turn = await DiagnosticChatService.startSession(_repair);
       if (!mounted) return;
+      final seed = DiagnosticWorkflowTemplate.seedChecklist(_repair);
       setState(() {
         _messages.clear();
         _checklist.clear();
@@ -85,8 +123,9 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
           DiagnosticChatMessage(isUser: false, text: turn.nextQuestion),
         );
         _technicalPreview = turn.technicalPreview;
-        _checklist.addAll(turn.checklistAdd);
+        _checklist.addAll(_mergeSeedWithAi(seed, turn.checklistAdd));
         _sessionComplete = turn.sessionComplete;
+        _phase = turn.phase ?? DiagnosticPhase.powerInput;
         _loading = false;
       });
       _maybeOpenTechnicalDrawer(turn);
@@ -121,7 +160,7 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
 
     try {
       final turn = await DiagnosticChatService.continueSession(
-        widget.repair,
+        _repair,
         history,
         text,
       );
@@ -135,6 +174,9 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
         }
         _checklist.addAll(turn.checklistAdd);
         _sessionComplete = turn.sessionComplete;
+        if (turn.phase != null) {
+          _phase = turn.phase!;
+        }
         _sending = false;
       });
       _maybeOpenTechnicalDrawer(turn);
@@ -171,7 +213,7 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
     _scrollToBottom();
     try {
       final turn = await DiagnosticChatService.continueSession(
-        widget.repair,
+        _repair,
         history,
         prompt,
         microscopeImagePath: imagePath,
@@ -186,6 +228,9 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
         }
         _checklist.addAll(turn.checklistAdd);
         _sessionComplete = turn.sessionComplete;
+        if (turn.phase != null) {
+          _phase = turn.phase!;
+        }
         _sending = false;
       });
       _maybeOpenTechnicalDrawer(turn);
@@ -216,13 +261,14 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
   Future<void> _persist() async {
     try {
       await RepairStorage.instance.saveDiagnosticChatSnapshot(
-        widget.repair.id,
+        _repair.id,
         DiagnosticChatSnapshot(
           messages: List.from(_messages),
           checklist: List.from(_checklist),
           technicalPreview: _technicalPreview,
           chatMode: _chatMode,
           sessionComplete: _sessionComplete,
+          diagnosticPhase: diagnosticPhaseToApi(_phase),
         ),
       );
     } catch (_) {}
@@ -237,7 +283,7 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final repair = widget.repair;
+    final repair = _repair;
     final drawerW = math.min(440.0, MediaQuery.sizeOf(context).width * 0.94);
 
     return Scaffold(
@@ -309,13 +355,45 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
         title: Text('Asystent · ${repair.summaryLine}'),
         backgroundColor: const Color(0xFF1F1F1F),
         actions: [
+          PopupMenuButton<RepairStatus>(
+            tooltip: 'Status naprawy',
+            onSelected: (s) async {
+              final u = _repair.copyWith(repairStatus: s);
+              await RepairStorage.instance.saveRepair(u);
+              if (!mounted) return;
+              setState(() => _repair = u);
+            },
+            itemBuilder: (context) => RepairStatus.values
+                .map(
+                  (s) => PopupMenuItem<RepairStatus>(
+                    value: s,
+                    child: Text(s.labelPl),
+                  ),
+                )
+                .toList(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.flag_outlined, size: 22),
+                  const SizedBox(width: 6),
+                  Text(
+                    _repair.repairStatus.labelPl,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const Icon(Icons.arrow_drop_down, size: 20),
+                ],
+              ),
+            ),
+          ),
           IconButton(
             tooltip: 'Pomiary',
             onPressed: () {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(
                   builder: (context) =>
-                      MeasurementsQuickScreen(repair: widget.repair),
+                      MeasurementsQuickScreen(repair: _repair),
                 ),
               );
             },
@@ -392,7 +470,9 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
   Widget _buildChatArea() {
     return Column(
       children: [
-        _RepairHeaderBar(repair: widget.repair),
+        _RepairHeaderBar(repair: _repair),
+        _buildPhaseStrip(),
+        _buildMeasurementsQuickCard(),
         Expanded(
           child: ListView.builder(
             controller: _scrollCtrl,
@@ -475,7 +555,16 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _RepairHeaderBar(repair: widget.repair),
+        _RepairHeaderBar(repair: _repair),
+        _buildPhaseStrip(),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Text(
+            'Lista kontrolna: pozycje [Szablon] to sugerowana kolejność szyn; '
+            'asystent dopisuje własne punkty.',
+            style: TextStyle(color: Colors.grey, fontSize: 11, height: 1.3),
+          ),
+        ),
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: Text(
@@ -514,6 +603,104 @@ class _DiagnosticDashboardScreenState extends State<DiagnosticDashboardScreen> {
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _buildPhaseStrip() {
+    const phases = DiagnosticPhase.values;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 8, bottom: 4),
+            child: Text(
+              'Etap diagnozy (wg odpowiedzi AI)',
+              style: TextStyle(
+                color: Colors.grey,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final p in phases)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Tooltip(
+                      message: p.hintPl,
+                      child: Material(
+                        color: p == _phase
+                            ? Colors.orange.withValues(alpha: 0.22)
+                            : const Color(0xFF2A2A2A),
+                        borderRadius: BorderRadius.circular(20),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          child: Text(
+                            p.labelPl,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: p == _phase
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: p == _phase
+                                  ? Colors.orangeAccent
+                                  : Colors.grey.shade400,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMeasurementsQuickCard() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: Material(
+        color: const Color(0xFF1E1E1E),
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          onTap: _loading || _sending ? null : _openMeasurementsQuick,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                const Icon(Icons.speed, color: Colors.orangeAccent, size: 22),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _measurementCount == 0
+                        ? 'Pomiary — szybki zapis napięcia, rezystancji i prądu '
+                            '(osobno od czatu; zalecane przy każdej szynie)'
+                        : 'Pomiary: $_measurementCount wpisów — dotknij, by dodać kolejny',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.3,
+                      color: Colors.grey.shade300,
+                    ),
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: Colors.grey.shade500),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -599,6 +786,20 @@ class _RepairHeaderBar extends StatelessWidget {
                 fontSize: 12,
               ),
             ),
+            if (repair.hasDocumentationAttached) ...[
+              const SizedBox(height: 6),
+              Text(
+                [
+                  if (repair.documentationUrl != null &&
+                      repair.documentationUrl!.trim().isNotEmpty)
+                    'URL: ${repair.documentationUrl}',
+                  if (repair.documentationLocalPath != null &&
+                      repair.documentationLocalPath!.trim().isNotEmpty)
+                    'Plik: ${repair.documentationLocalPath}',
+                ].join('\n'),
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+              ),
+            ],
           ],
         ),
       ),
